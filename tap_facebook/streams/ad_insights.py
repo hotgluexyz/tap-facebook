@@ -85,7 +85,10 @@ class AdsInsightStream(Stream):
         Args:
             new_value: TODO
         """
-        self._primary_keys = new_value
+        if not new_value:
+            self._primary_keys = ["date_start", "account_id", "ad_id"] + self._report_definition["breakdowns"]
+        else:
+            self._primary_keys = new_value
 
     @staticmethod
     def _get_datatype(field: str) -> th.Type | None:
