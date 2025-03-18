@@ -246,3 +246,23 @@ class AdAccountsStream(FacebookStream):
             params["after"] = next_page_token
 
         return params
+
+
+    def get_child_context(self, record, context):
+        return {"account_id": record["account_id"]}
+    
+
+    def _sync_children(self, child_context: dict | None) -> None:
+        if not child_context:
+            return
+        
+        if self.config.get("account_id"):
+            if not child_context["account_id"] == self.config.get("account_id"):
+                return
+        
+        if self.config.get("account_ids"):
+            specified_account_ids = [id.strip() for id in self.config.get("account_ids").split(",")]
+            if not child_context["account_id"] in specified_account_ids:
+                return
+        
+        super()._sync_children(child_context)
