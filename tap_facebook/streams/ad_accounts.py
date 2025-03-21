@@ -38,9 +38,6 @@ class AdAccountsStream(FacebookStream):
 
     @property
     def columns(self) -> list[str]:
-        if not self.selected:
-            return ["id", "name", "account_id"]
-        
         columns = [
         "account_id",
         "business_name",
@@ -239,6 +236,13 @@ class AdAccountsStream(FacebookStream):
         )
         row["spend_cap"] = int(row["spend_cap"]) if "spend_cap" in row else None
         return row
+
+    def get_records(self, context):
+        if self.selected == False and self.configured_account_ids:
+            for account_id in self.configured_account_ids:
+                yield {"account_id": account_id}
+        else:
+            yield from super().get_records(context)
 
     def get_url_params(
         self,
