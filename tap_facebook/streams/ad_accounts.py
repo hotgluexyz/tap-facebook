@@ -124,6 +124,8 @@ class AdAccountsStream(FacebookStream):
         "tax_id",
         ]
             
+        # Owner field throws 403 if queried without permission
+        # Only sync if explicitly selected
         if self.mask.get(('properties', 'owner')) == False:
             columns = [col for col in columns if col != "owner"]
 
