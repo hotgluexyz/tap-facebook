@@ -35,7 +35,13 @@ class AdAccountsStream(FacebookStream):
         version = self.config.get("api_version", "")
         return f"https://graph.facebook.com/{version}/me"
 
-    columns = [  # noqa: RUF012
+
+    @property
+    def columns(self) -> list[str]:
+        if not self.selected:
+            return ["id", "name", "account_id"]
+        
+        columns = [
         "account_id",
         "business_name",
         "account_status",
@@ -116,10 +122,15 @@ class AdAccountsStream(FacebookStream):
         "salesforce_invoice_group_id",
         "business_zip",
         "tax_id",
-    ]
+        ]
+            
+        if self.mask.get(('properties', 'owner')) == False:
+            columns = [col for col in columns if col != "owner"]
+
+        return columns
 
     name = "adaccounts"
-    path = f"/adaccounts?fields={columns}"
+    path = "/adaccounts"
     tap_stream_id = "adaccounts"
     primary_keys = ["created_time"]  # noqa: RUF012
     replication_key = "created_time"
@@ -244,7 +255,9 @@ class AdAccountsStream(FacebookStream):
         params: dict = {"limit": 25}
         if next_page_token is not None:
             params["after"] = next_page_token
-
+        
+        params["fields"] = f"{self.columns}"
+        
         return params
 
 
@@ -256,13 +269,18 @@ class AdAccountsStream(FacebookStream):
         if not child_context:
             return
         
-        if self.config.get("account_id"):
-            if not child_context["account_id"] == self.config.get("account_id"):
-                return
-        
-        if self.config.get("account_ids"):
-            specified_account_ids = [id.strip() for id in self.config.get("account_ids").split(",")]
-            if not child_context["account_id"] in specified_account_ids:
-                return
+        if self.configured_account_ids and child_context["account_id"] not in self.configured_account_ids:
+            return
         
         super()._sync_children(child_context)
+
+
+    @property
+    def configured_account_ids(self) -> list[str]:
+        acct_ids = []
+        if self.config.get("account_id"):
+            acct_ids.append(self.config.get("account_id"))
+        if self.config.get("account_ids"):
+            acct_ids.extend([id.strip() for id in self.config.get("account_ids").split(",")])
+        acct_ids = [id.replace("act_", "") for id in acct_ids]
+        return acct_ids
