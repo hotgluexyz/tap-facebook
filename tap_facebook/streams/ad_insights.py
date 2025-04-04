@@ -135,6 +135,35 @@ class AdsInsightStream(Stream):
             columns = list(self.schema["properties"])
         return columns
 
+    def _get_earliest_record_date(self, account_id: str, sync_end_date: pendulum.Date) -> pendulum.Date:
+        """
+        Make a single Insights API call using sort to determine the oldest date with data.
+        """
+        params = {
+            "level": self._report_definition["level"],
+            "fields": "date_start",
+            "sort": "date_start_ascending",
+            "time_range": {
+                "since": pendulum.parse(self.config["start_date"]).format("YYYY-MM-DD"),
+                "until": sync_end_date.format("YYYY-MM-DD"),
+            },
+        }
+        api: FacebookAdsApi = FacebookAdsApi.get_default_api()
+        url = f"https://graph.facebook.com/{self.config['api_version']}/act_{account_id}/insights"
+        try:
+            response = api.call("GET", url, params=params)
+            data = response.json().get("data", [])
+            if data:
+                earliest = pendulum.parse(data[0]["date_start"]).date()
+                self.logger.info(f"Earliest record found: {earliest.to_date_string()}")
+                return earliest
+        except Exception as e:
+            self.logger.error(f"Error fetching earliest record date: {e}")
+        # If no data is returned or an error occurred, fall back to the configured start_date.
+        fallback_date = pendulum.parse(self.config["start_date"]).date()
+        self.logger.info(f"Falling back to configured start_date: {fallback_date.to_date_string()}")
+        return fallback_date
+
     def _get_start_date(
         self,
         context: dict | None,
@@ -195,7 +224,17 @@ class AdsInsightStream(Stream):
         else:
             sync_end_date = pendulum.today().date()
 
+        # Determine the starting point from our bookmark or config
         report_start_consolidated = self._get_start_date(context)
+        # Adjust start date using the sorting approach to find the earliest record.
+        earliest_data_date = self._get_earliest_record_date(account_id, sync_end_date)
+        if earliest_data_date > report_start_consolidated:
+            self.logger.info(
+                "Adjusting report start from %s to earliest available date %s.",
+                report_start_consolidated.to_date_string(),
+                earliest_data_date.to_date_string(),
+            )
+            report_start_consolidated = earliest_data_date
 
         columns = self._get_selected_columns()
         self.logger.info(f"Syncing reports starting from {report_start_consolidated.to_date_string()} to {sync_end_date.to_date_string()}")
