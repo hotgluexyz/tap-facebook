@@ -6,7 +6,7 @@ import json
 import time
 import typing as t
 from functools import lru_cache
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 
 import facebook_business.adobjects.user as fb_user
 import pendulum
@@ -49,6 +49,9 @@ INSIGHTS_MAX_WAIT_TO_START_SECONDS = 5 * 60
 INSIGHTS_MAX_WAIT_TO_FINISH_SECONDS = 30 * 60
 USAGE_LIMIT_THRESHOLD = 75
 BATCH_SIZE = 30
+
+GRAPH_API_BASE_URL = "https://graph.facebook.com/"
+ 
 
 class AdsInsightStream(Stream):
     name = "adsinsights"
@@ -149,7 +152,7 @@ class AdsInsightStream(Stream):
             },
         }
         api: FacebookAdsApi = FacebookAdsApi.get_default_api()
-        url = f"https://graph.facebook.com/{self.config['api_version']}/act_{account_id}/insights"
+        url = urljoin(GRAPH_API_BASE_URL, f"{self.config['api_version']}/act_{account_id}/insights")
         try:
             response = api.call("GET", url, params=params)
             data = response.json().get("data", [])
@@ -164,6 +167,50 @@ class AdsInsightStream(Stream):
         self.logger.info(f"Falling back to configured start_date: {fallback_date.to_date_string()}")
         return fallback_date
 
+    def _execute_batch_with_retry(self, batch_requests: list[dict], account_id: str, max_retries: int = 3) -> list[dict]:
+            """
+            Execute a batch of requests and retry individual failed requests.
+            """
+            api: FacebookAdsApi = FacebookAdsApi.get_default_api()
+            results = []
+            # Execute the initial batch
+            batch_url = urljoin(GRAPH_API_BASE_URL, f"{self.config['api_version']}/")
+            batch_response = api.call("POST", batch_url, params={"batch": json.dumps(batch_requests)})
+            responses = batch_response.json()
+    
+            for idx, response in enumerate(responses):
+                if response.get("code") == 200:
+                    results.append(response)
+                else:
+                    # If a response fails, retry individually
+                    retries = 0
+                    success = False
+                    while retries < max_retries and not success:
+                        error_body = response.get("body", "")
+                        if "#80000" in error_body:
+                            self.logger.warning("Rate Limit error encountered for request index %s. Sleeping for 5 minutes before retrying.", idx)
+                            time.sleep(300)
+                        else:
+                            backoff = 60 * (2 ** retries)
+                            self.logger.warning("Retrying request index %s (attempt %s) after sleeping %s seconds.", idx, retries+1, backoff)
+                            time.sleep(backoff)
+                        # Construct the full URL for this individual request
+                        relative_url = batch_requests[idx].get("relative_url")
+                        full_url = urljoin(GRAPH_API_BASE_URL, f"{self.config['api_version']}/{relative_url}")
+                        try:
+                            individual_response = api.call("GET", full_url)
+                            if individual_response.json().get("data") or individual_response.ok:
+                                results.append(individual_response.json())
+                                success = True
+                            else:
+                                retries += 1
+                        except Exception as e:
+                            self.logger.error("Error retrying request index %s: %s", idx, e)
+                            retries += 1
+                    if not success:
+                        raise RuntimeError(f"Request at index {idx} failed after {max_retries} retries: {response}")
+            return results
+    
     def _get_start_date(
         self,
         context: dict | None,
@@ -207,93 +254,82 @@ class AdsInsightStream(Stream):
             report_start = oldest_allowed_start_date
         return report_start
 
-    def get_records(
-        self,
-        context: dict | None,
-    ) -> t.Iterable[dict | tuple[dict, dict | None]]:
-        account_id = context.get("account_id")
-        if not account_id:
-            raise RuntimeError("Account ID not found in context.")
-        self._initialize_client(account_id)
-
-        time_increment = self._report_definition["time_increment_days"]
-
-        end_date = self.config.get("end_date")
-        if end_date:
-            sync_end_date = pendulum.parse(end_date).date()
-        else:
-            sync_end_date = pendulum.today().date()
-
-        # Determine the starting point from our bookmark or config
-        report_start_consolidated = self._get_start_date(context)
-        # Adjust start date using the sorting approach to find the earliest record.
-        earliest_data_date = self._get_earliest_record_date(account_id, sync_end_date)
-        if earliest_data_date > report_start_consolidated:
-            self.logger.info(
-                "Adjusting report start from %s to earliest available date %s.",
-                report_start_consolidated.to_date_string(),
-                earliest_data_date.to_date_string(),
-            )
-            report_start_consolidated = earliest_data_date
-
-        columns = self._get_selected_columns()
-        self.logger.info(f"Syncing reports starting from {report_start_consolidated.to_date_string()} to {sync_end_date.to_date_string()}")
-        while report_start_consolidated < sync_end_date:
-            report_start = report_start_consolidated
-            # Prepare batch requests
-            batch_requests = []
-            batch_final_dates = []
-            days_to_fetch = min(sync_end_date.diff(report_start).days+1,BATCH_SIZE)
-            for day_offset in range(1, days_to_fetch+1, time_increment):
-                batch_params = {
-                    "level": self._report_definition["level"],
-                    "action_breakdowns": self._report_definition["action_breakdowns"],
-                    "action_report_time": self._report_definition["action_report_time"],
-                    "breakdowns": self._report_definition["breakdowns"],
-                    "fields": columns,
-                    "time_increment": time_increment,
-                    "limit": 100,
-                    "action_attribution_windows": [
-                        self._report_definition["action_attribution_windows_view"],
-                        self._report_definition["action_attribution_windows_click"],
-                    ],
-                    "time_range": {
-                        "since": (report_start).to_date_string(),
-                        "until": (report_start.add(days=(time_increment - 1))).to_date_string(),
-                    },
-                }
-                batch_requests.append({
-                    "method": "GET",
-                    "relative_url": f"act_{account_id}/insights?{urlencode(batch_params)}",
-                })
-                report_start = report_start.add(days=time_increment)
-                batch_final_dates.append(report_start)
-            # Execute the batch
-            api:FacebookAdsApi = FacebookAdsApi.get_default_api()
-            self.check_limit(account_id)
-            batch_response = api.call("POST", ["/"], params={"batch": json.dumps(batch_requests)})
-
-            # Process batch responses
-            for final_date, response in zip(batch_final_dates, batch_response.json()):
-                if response.get("code") == 200:
-                    data = json.loads(response["body"])
-                    if len(data["data"]) > 0:
-                        self.logger.info(f"{len(data['data'])} records fetched for {final_date.to_date_string()}")
-                        for record in data["data"]:
+    def get_records(self, context: dict | None) -> t.Iterable[dict | tuple[dict, dict | None]]:
+            account_id = context.get("account_id")
+            if not account_id:
+                raise RuntimeError("Account ID not found in context.")
+            self._initialize_client(account_id)
+    
+            time_increment = self._report_definition["time_increment_days"]
+    
+            end_date = self.config.get("end_date")
+            if end_date:
+                sync_end_date = pendulum.parse(end_date).date()
+            else:
+                sync_end_date = pendulum.today().date()
+    
+            report_start_consolidated = self._get_start_date(context)
+            earliest_data_date = self._get_earliest_record_date(account_id, sync_end_date)
+            if earliest_data_date > report_start_consolidated:
+                self.logger.info(
+                    "Adjusting report start from %s to earliest available date %s.",
+                    report_start_consolidated.to_date_string(),
+                    earliest_data_date.to_date_string(),
+                )
+                report_start_consolidated = earliest_data_date
+    
+            columns = self._get_selected_columns()
+            self.logger.info(f"Syncing reports starting from {report_start_consolidated.to_date_string()} to {sync_end_date.to_date_string()}")
+    
+            while report_start_consolidated < sync_end_date:
+                report_start = report_start_consolidated
+                batch_requests = []
+                batch_final_dates = []
+                days_to_fetch = min(sync_end_date.diff(report_start).days + 1, BATCH_SIZE)
+    
+                for day_offset in range(1, days_to_fetch + 1, time_increment):
+                    batch_params = {
+                        "level": self._report_definition["level"],
+                        "action_breakdowns": self._report_definition["action_breakdowns"],
+                        "action_report_time": self._report_definition["action_report_time"],
+                        "breakdowns": self._report_definition["breakdowns"],
+                        "fields": columns,
+                        "time_increment": time_increment,
+                        "limit": 100,
+                        "action_attribution_windows": [
+                            self._report_definition["action_attribution_windows_view"],
+                            self._report_definition["action_attribution_windows_click"],
+                        ],
+                        "time_range": {
+                            "since": report_start.to_date_string(),
+                            "until": report_start.add(days=(time_increment - 1)).to_date_string(),
+                        },
+                    }
+                    # Note: relative URL is built without a leading slash since _execute_batch_with_retry
+                    # will construct the full URL.
+                    batch_requests.append({
+                        "method": "GET",
+                        "relative_url": f"act_{account_id}/insights?{urlencode(batch_params)}",
+                    })
+                    report_start = report_start.add(days=time_increment)
+                    batch_final_dates.append(report_start)
+    
+                # Execute batch with retry logic
+                batch_results = self._execute_batch_with_retry(batch_requests, account_id)
+    
+                for final_date, response in zip(batch_final_dates, batch_results):
+                    # Process each successful response
+                    # Here we assume the response contains a "data" field with records
+                    data = response.get("data", [])
+                    if data:
+                        self.logger.info(f"{len(data)} records fetched for {final_date.to_date_string()}")
+                        for record in data:
                             yield record
                     else:
                         self.logger.info(f"No records fetched for {final_date.to_date_string()}")
                     report_start_consolidated = final_date
-                else:
-                    if "#80000" in response["body"]:
-                        self.logger.warning("Rate Limit Reached. Cooling Time 5 Minutes.")
-                        time.sleep(300)
-                        self.logger.info("Trying again ...")
-                        break
-                    else:
-                        raise RuntimeError(f"Batch request failed: {response}")
-        self.logger.info("Syncing reports completed.")
-
+    
+            self.logger.info("Syncing reports completed.")
     #Function to find the string between two strings or characters
     def find_between(self, usage, find ) -> str:
         try:
