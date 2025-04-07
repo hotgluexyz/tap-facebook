@@ -138,9 +138,10 @@ class AdsInsightStream(Stream):
             columns = list(self.schema["properties"])
         return columns
 
-    def _get_earliest_record_date(self, account_id: str, sync_end_date: pendulum.Date) -> pendulum.Date:
+    def _get_earliest_record_date(self, account_id: str, sync_end_date: pendulum.Date) -> pendulum.Date | None:
         """
         Make a single Insights API call using sort to determine the oldest date with data.
+        Returns None if no data exists.
         """
         params = {
             "level": self._report_definition["level"],
@@ -160,12 +161,12 @@ class AdsInsightStream(Stream):
                 earliest = pendulum.parse(data[0]["date_start"]).date()
                 self.logger.info(f"Earliest record found: {earliest.to_date_string()}")
                 return earliest
+            else:
+                self.logger.info("No data found for the specified date range")
+                return None
         except Exception as e:
             self.logger.error(f"Error fetching earliest record date: {e}")
-        # If no data is returned or an error occurred, fall back to the configured start_date.
-        fallback_date = pendulum.parse(self.config["start_date"]).date()
-        self.logger.info(f"Falling back to configured start_date: {fallback_date.to_date_string()}")
-        return fallback_date
+            return None
 
     def _get_start_date(
         self,
@@ -269,6 +270,12 @@ class AdsInsightStream(Stream):
         report_start_consolidated = self._get_start_date(context)
         # Adjust start date using the sorting approach to find the earliest record.
         earliest_data_date = self._get_earliest_record_date(account_id, sync_end_date)
+        
+        # If no data exists, exit early
+        if earliest_data_date is None:
+            self.logger.info("No data exists for this account in the specified date range. Exiting.")
+            return
+            
         if earliest_data_date > report_start_consolidated:
             self.logger.info(
                 "Adjusting report start from %s to earliest available date %s.",
