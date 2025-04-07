@@ -50,6 +50,9 @@ INSIGHTS_MAX_WAIT_TO_FINISH_SECONDS = 30 * 60
 USAGE_LIMIT_THRESHOLD = 75
 BATCH_SIZE = 30
 
+BACKOFF_MAX_RETRIES = 5
+BACKOFF_INITIAL_SLEEP = 60
+
 class AdsInsightStream(Stream):
     name = "adsinsights"
     replication_method = REPLICATION_INCREMENTAL
@@ -207,6 +210,44 @@ class AdsInsightStream(Stream):
             report_start = oldest_allowed_start_date
         return report_start
 
+    def _execute_single_request_with_retries(
+        self,
+        api: FacebookAdsApi,
+        batch_request: dict,
+    ) -> dict:
+        """
+        Execute a single batch request (wrapped in a list) with retry logic.
+        Retries individual requests in case of transient errors (like rate limiting).
+        """
+        attempt = 0
+        sleep_time = BACKOFF_INITIAL_SLEEP
+        while attempt < BACKOFF_MAX_RETRIES:
+            try:
+                response = api.call("POST", ["/"], params={"batch": json.dumps([batch_request])})
+                resp = response.json()[0]
+                if resp.get("code") == 200:
+                    return resp
+                elif "#80000" in resp.get("body", ""):
+                    self.logger.warning(
+                        "Rate Limit Reached on individual request. Cooling for %s seconds. Attempt %s/%s",
+                        sleep_time,
+                        attempt + 1,
+                        BACKOFF_MAX_RETRIES,
+                    )
+                    time.sleep(sleep_time)
+                    sleep_time *= 2  # Exponential backoff.
+                    attempt += 1
+                else:
+                    raise RuntimeError(f"Individual request failed with non-rate-limit error: {resp}")
+            except Exception as e:
+                self.logger.error(
+                    "Error during individual request retry: %s. Attempt %s/%s", e, attempt + 1, BACKOFF_MAX_RETRIES
+                )
+                time.sleep(sleep_time)
+                sleep_time *= 2
+                attempt += 1
+        raise RuntimeError("Max retries exceeded for individual request")
+    
     def get_records(
         self,
         context: dict | None,
@@ -274,24 +315,31 @@ class AdsInsightStream(Stream):
             batch_response = api.call("POST", ["/"], params={"batch": json.dumps(batch_requests)})
 
             # Process batch responses
-            for final_date, response in zip(batch_final_dates, batch_response.json()):
+            for final_date, batch_request, response in zip(batch_final_dates, batch_requests, batch_response.json()):
                 if response.get("code") == 200:
                     data = json.loads(response["body"])
-                    if len(data["data"]) > 0:
-                        self.logger.info(f"{len(data['data'])} records fetched for {final_date.to_date_string()}")
-                        for record in data["data"]:
-                            yield record
-                    else:
-                        self.logger.info(f"No records fetched for {final_date.to_date_string()}")
-                    report_start_consolidated = final_date
                 else:
-                    if "#80000" in response["body"]:
-                        self.logger.warning("Rate Limit Reached. Cooling Time 5 Minutes.")
-                        time.sleep(300)
-                        self.logger.info("Trying again ...")
-                        break
+                    if "#80000" in response.get("body", ""):
+                        self.logger.warning(
+                            "Batch request for date %s failed due to rate limiting. Retrying individual request.",
+                            final_date.to_date_string(),
+                        )
+                        response = self._execute_single_request_with_retries(api, batch_request)
+                        data = json.loads(response["body"])
                     else:
                         raise RuntimeError(f"Batch request failed: {response}")
+                if data.get("data") and len(data["data"]) > 0:
+                    self.logger.info(
+                        "%s records fetched for %s",
+                        len(data["data"]),
+                        final_date.to_date_string(),
+                    )
+                    for record in data["data"]:
+                        yield record
+                else:
+                    self.logger.info("No records fetched for %s", final_date.to_date_string())
+                report_start_consolidated = final_date
+                    
         self.logger.info("Syncing reports completed.")
 
     #Function to find the string between two strings or characters
