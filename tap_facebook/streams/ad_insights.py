@@ -145,8 +145,8 @@ class AdsInsightStream(Stream):
         """
         params = {
             "level": self._report_definition["level"],
-            "fields": "date_start",
-            "sort": "date_start_ascending",
+            "fields": ["date_start", "ad_id", "impressions", "date_stop", "created_time"],
+            "sort": ["created_time_ascending"],
             "time_range": {
                 "since": pendulum.parse(self.config["start_date"]).format("YYYY-MM-DD"),
                 "until": sync_end_date.format("YYYY-MM-DD"),
@@ -158,9 +158,9 @@ class AdsInsightStream(Stream):
             response = api.call("GET", url, params=params)
             data = response.json().get("data", [])
             if data:
-                earliest = pendulum.parse(data[0]["date_start"]).date()
-                self.logger.info(f"Earliest record found: {earliest.to_date_string()}")
-                return earliest
+                earliest_date = pendulum.parse(data[0]["created_time"]).date()
+                self.logger.info(f"Earliest record found: {earliest_date}")
+                return earliest_date
             else:
                 self.logger.info("No data found for the specified date range")
                 return None
