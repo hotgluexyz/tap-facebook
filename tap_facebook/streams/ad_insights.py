@@ -118,6 +118,14 @@ class AdsInsightStream(Stream):
             properties.append(th.Property(breakdown, th.StringType()))
         return th.PropertiesList(*properties).to_dict()
 
+    @property
+    def oldest_allowed_start_date(self) -> pendulum.Date:
+        """
+        Facebook stores metrics for a maximum of 37 months. 
+        Returns the oldest date that can be fetched from the API.
+        """
+        return pendulum.today().date().subtract(months=36)
+    
     def _initialize_client(self, account_id) -> None:
         FacebookAdsApi.init(
             access_token=self.config["access_token"],
@@ -143,12 +151,15 @@ class AdsInsightStream(Stream):
         Make a single Insights API call using sort to determine the oldest date with data.
         Returns None if no data exists.
         """
+        config_start_date = pendulum.parse(self.config["start_date"]).date()
+        start_date = max(config_start_date, self.oldest_allowed_start_date)
+        
         params = {
             "level": self._report_definition["level"],
             "fields": ["date_start", "ad_id", "impressions", "date_stop", "created_time"],
             "sort": ["created_time_ascending"],
             "time_range": {
-                "since": pendulum.parse(self.config["start_date"]).format("YYYY-MM-DD"),
+                "since": start_date.format("YYYY-MM-DD"),
                 "until": sync_end_date.format("YYYY-MM-DD"),
             },
         }
@@ -167,6 +178,8 @@ class AdsInsightStream(Stream):
         except Exception as e:
             self.logger.error(f"Error fetching earliest record date: {e}")
             return None
+
+
 
     def _get_start_date(
         self,
@@ -199,16 +212,14 @@ class AdsInsightStream(Stream):
         # older that 37 months from current date would result in 400 Bad request
         # HTTP response.
         # https://developers.facebook.com/docs/marketing-api/reference/ad-account/insights/#overview
-        today = pendulum.today().date()
-        oldest_allowed_start_date = today.subtract(months=36)
-        if report_start < oldest_allowed_start_date:
+        if report_start < self.oldest_allowed_start_date:
             self.logger.info(
                 "Report start date '%s' is older than 37 months. "
                 "Using oldest allowed start date '%s' instead.",
                 report_start,
-                oldest_allowed_start_date,
+                self.oldest_allowed_start_date,
             )
-            report_start = oldest_allowed_start_date
+            report_start = self.oldest_allowed_start_date
         return report_start
 
     def _execute_single_request_with_retries(
