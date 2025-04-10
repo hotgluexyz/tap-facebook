@@ -149,7 +149,7 @@ class AdsInsightStream(Stream):
     def _get_earliest_record_date(self, account_id: str, sync_end_date: pendulum.Date) -> pendulum.Date | None:
         """
         Make a single Insights API call using sort to determine the oldest date with data.
-        Returns None if no data exists.
+        Returns None if no data exists. Will retry on 500 errors and other transient failures.
         """
         config_start_date = pendulum.parse(self.config["start_date"]).date()
         start_date = max(config_start_date, self.oldest_allowed_start_date)
@@ -177,7 +177,7 @@ class AdsInsightStream(Stream):
                 return None
         except Exception as e:
             self.logger.error(f"Error fetching earliest record date: {e}")
-            return None
+            raise e
 
 
 
@@ -229,7 +229,7 @@ class AdsInsightStream(Stream):
     ) -> dict:
         """
         Execute a single batch request (wrapped in a list) with retry logic.
-        Retries individual requests in case of transient errors (like rate limiting).
+        Retries individual requests in case of transient errors (like rate limiting or 500 errors).
         """
         attempt = 0
         sleep_time = BACKOFF_INITIAL_SLEEP
@@ -249,8 +249,18 @@ class AdsInsightStream(Stream):
                     time.sleep(sleep_time)
                     sleep_time *= 2  # Exponential backoff.
                     attempt += 1
+                elif resp.get("code") == 500:
+                    self.logger.warning(
+                        "500 Server Error on individual request. Retrying in %s seconds. Attempt %s/%s",
+                        sleep_time,
+                        attempt + 1,
+                        BACKOFF_MAX_RETRIES,
+                    )
+                    time.sleep(sleep_time)
+                    sleep_time *= 2  # Exponential backoff.
+                    attempt += 1
                 else:
-                    raise RuntimeError(f"Individual request failed with non-rate-limit error: {resp}")
+                    raise RuntimeError(f"Individual request failed with non-retryable error: {resp}")
             except Exception as e:
                 self.logger.error(
                     "Error during individual request retry: %s. Attempt %s/%s", e, attempt + 1, BACKOFF_MAX_RETRIES
@@ -337,9 +347,17 @@ class AdsInsightStream(Stream):
                 if response.get("code") == 200:
                     data = json.loads(response["body"])
                 else:
+                    # Handle rate limits, 500 errors, or other transient failures
                     if "#80000" in response.get("body", ""):
                         self.logger.warning(
                             "Batch request for date %s failed due to rate limiting. Retrying individual request.",
+                            final_date.to_date_string(),
+                        )
+                        response = self._execute_single_request_with_retries(api, batch_request)
+                        data = json.loads(response["body"])
+                    elif response.get("code") == 500:
+                        self.logger.warning(
+                            "Batch request for date %s failed with 500 error. Retrying individual request.",
                             final_date.to_date_string(),
                         )
                         response = self._execute_single_request_with_retries(api, batch_request)
