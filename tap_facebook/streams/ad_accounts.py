@@ -214,7 +214,7 @@ class AdAccountsStream(FacebookStream):
 
     @property
     def replication_key(self) -> str | None:
-        if self.config.get("incremental_adaccounts"):
+        if self.config.get("incremental_adaccounts", True):
             return "created_time"
         return None
     
