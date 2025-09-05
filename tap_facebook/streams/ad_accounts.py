@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import typing as t
 
-from singer_sdk.streams.core import REPLICATION_INCREMENTAL
 from singer_sdk.typing import (
     ArrayType,
     BooleanType,
@@ -126,8 +125,6 @@ class AdAccountsStream(FacebookStream):
     path = "/adaccounts"
     tap_stream_id = "adaccounts"
     primary_keys = ["created_time"]  # noqa: RUF012
-    replication_key = "created_time"
-    replication_method = REPLICATION_INCREMENTAL
 
     schema = PropertiesList(
         Property("account_id", StringType),
@@ -215,6 +212,12 @@ class AdAccountsStream(FacebookStream):
         Property("tax_id", StringType),
     ).to_dict()
 
+    @property
+    def replication_key(self) -> str | None:
+        if self.config.get("incremental_adaccounts"):
+            return "created_time"
+        return None
+    
     def post_process(
         self,
         row: dict,
