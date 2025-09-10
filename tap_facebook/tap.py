@@ -180,6 +180,11 @@ class TapFacebook(Tap):
             th.DateTimeType,
             description="The latest record date to sync",
         ),
+        th.Property(
+            "incremental_adaccounts",
+            th.BooleanType,
+            description="If set to true (by default), then will sync adaccounts incrementally, otherwise will perform a full sync."
+        )
     ).to_dict()
 
     def discover_streams(self) -> list[FacebookStream]:
