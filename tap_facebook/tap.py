@@ -53,6 +53,24 @@ DEFAULT_INSIGHT_REPORT = {
 class TapFacebook(Tap):
     """Singer tap for extracting data from the Facebook Marketing API."""
 
+    def __init__(
+        self,
+        config=None,
+        catalog=None,
+        state=None,
+        parse_env_config=False,
+        validate_config=True,
+        setup_mapper=True,
+    ) -> None:
+        self.config_file = config[0]
+        super().__init__(
+            config=config,
+            catalog=catalog,
+            state=state,
+            parse_env_config=parse_env_config,
+            validate_config=validate_config
+        )
+
     name = "tap-facebook"
 
     # add parameters you have in config.json

@@ -125,6 +125,13 @@ class AdAccountsStream(FacebookStream):
     path = "/adaccounts"
     tap_stream_id = "adaccounts"
     primary_keys = ["created_time"]  # noqa: RUF012
+    replication_key = "created_time"  # Default value, can be overridden in __init__
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Set replication_key based on configuration
+        if not self.config.get("incremental_adaccounts", True):
+            self.replication_key = None
 
     schema = PropertiesList(
         Property("account_id", StringType),
@@ -212,12 +219,6 @@ class AdAccountsStream(FacebookStream):
         Property("tax_id", StringType),
     ).to_dict()
 
-    @property
-    def replication_key(self) -> str | None:
-        if self.config.get("incremental_adaccounts", True):
-            return "created_time"
-        return None
-    
     def post_process(
         self,
         row: dict,
