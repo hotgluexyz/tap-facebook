@@ -45,7 +45,7 @@ class OAuth2Authenticator(APIAuthenticatorBase):
     def is_token_valid(self) -> bool:
         access_token = self._tap._config.get("access_token")
         now = round(datetime.utcnow().timestamp())
-        expires_in = self._tap.config.get("expires_in")
+        expires_in = self._tap.config.get("expires_at")
         if expires_in is not None:
             expires_in = int(expires_in)
         if not access_token:
@@ -76,7 +76,7 @@ class OAuth2Authenticator(APIAuthenticatorBase):
 
         self._tap._config["access_token"] = token_json["access_token"]
         now = round(datetime.utcnow().timestamp())
-        self._tap._config["expires_in"] = int(token_json["expires_in"]) + now
+        self._tap._config["expires_at"] = int(token_json["expires_in"]) + now
 
         with open(self._tap.config_file, "w") as outfile:
             json.dump(self._tap._config, outfile, indent=4)
