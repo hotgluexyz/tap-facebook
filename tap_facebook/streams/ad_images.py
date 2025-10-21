@@ -74,5 +74,5 @@ class AdImages(AccountLevelStream):
 
     def get_url_params(self, context, next_page_token):  # noqa: ANN001, ANN201
         params = super().get_url_params(context, next_page_token)
-        params.pop("sort")
+        params.pop("sort", None)
         return params
