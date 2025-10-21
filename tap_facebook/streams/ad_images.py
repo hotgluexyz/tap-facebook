@@ -71,3 +71,8 @@ class AdImages(AccountLevelStream):
         Property("url_128", StringType),
         Property("width", IntegerType),
     ).to_dict()
+
+    def get_url_params(self, context, next_page_token):  # noqa: ANN001, ANN201
+        params = super().get_url_params(context, next_page_token)
+        params.pop("sort", None)
+        return params
