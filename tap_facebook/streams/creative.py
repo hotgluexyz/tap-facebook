@@ -83,8 +83,7 @@ class CreativeStream(AccountLevelStream):
     name = "creatives"
     path = f"/adcreatives?fields={columns}"
     tap_stream_id = "creatives"
-    replication_method = REPLICATION_INCREMENTAL
-    replication_key = "id"
+    replication_key = None # Not supported from creatives API
 
     schema = PropertiesList(
         Property("id", StringType),

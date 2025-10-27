@@ -41,8 +41,7 @@ class CustomConversions(AccountLevelStream):
     path = f"/customconversions?fields={columns}"
     tap_stream_id = "customconversions"
     primary_keys = ["id"]  # noqa: RUF012
-    replication_method = REPLICATION_INCREMENTAL
-    replication_key = "creation_time"
+    replication_key = None # Not supported from customconversions API
 
     schema = PropertiesList(
         Property("account_id", StringType),

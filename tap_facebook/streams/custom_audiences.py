@@ -30,7 +30,7 @@ class CustomAudiences(AccountLevelStream):
     """
 
     name = "customaudiences"
-    primary_keys = ["id"]  # noqa: RUF012
+    primary_keys = None # Not supported from customaudiences API
 
     @property
     def path(self) -> str:
