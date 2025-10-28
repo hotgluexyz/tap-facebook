@@ -29,8 +29,7 @@ class AdLabelsStream(AccountLevelStream):
     path = f"/adlabels?fields={columns}"
     primary_keys = ["id", "updated_time"]  # noqa: RUF012
     tap_stream_id = "adlabels"
-    replication_method = REPLICATION_INCREMENTAL
-    replication_key = "updated_time"
+    replication_key = None # Not supported from adlabels API
 
     schema = PropertiesList(
         Property("id", StringType),
