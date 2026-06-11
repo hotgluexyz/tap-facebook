@@ -98,6 +98,9 @@ class OAuth2Authenticator(APIAuthenticatorBase):
         self.access_token = token_json["access_token"]
 
         self._tap._config["access_token"] = token_json["access_token"]
+
+        with open(self._tap.config_file, "w") as outfile:
+            json.dump(self._tap._config, outfile, indent=4)
     
         if "expires_in" not in token_json:
             debug_token_response = requests.get(
