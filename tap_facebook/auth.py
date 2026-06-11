@@ -63,6 +63,7 @@ class OAuth2Authenticator(APIAuthenticatorBase):
             "client_id": 5,
             "fb_exchange_token": 10,
             "access_token": 10,
+            "input_token": 10,
         }
         message = str(exc)
         for param, visible_len in sensitive_params.items():
@@ -97,8 +98,29 @@ class OAuth2Authenticator(APIAuthenticatorBase):
         self.access_token = token_json["access_token"]
 
         self._tap._config["access_token"] = token_json["access_token"]
-        now = round(datetime.utcnow().timestamp())
-        self._tap._config["expires_at"] = int(token_json["expires_in"]) + now
+    
+        if "expires_in" not in token_json:
+            debug_token_response = requests.get(
+                "https://graph.facebook.com/v24.0/debug_token",
+                params={
+                    "input_token": self.access_token,  # token to inspect
+                    "access_token": f"{self._tap._config['client_id']}|{self._tap._config['client_secret']}",
+                },
+            )
+            try:
+                debug_token_response.raise_for_status()
+            except Exception as ex:
+                raise RuntimeError(
+                    f"Failed to get debug token, response was '{debug_token_response.json()}'. "
+                    f"{self._redact_oauth_exception(ex)}"
+                ) from None
+            debug_token_json = debug_token_response.json()
+            expires_in = debug_token_json.get("data", {}).get("data_access_expires_at")
+            self._tap._config["expires_at"] = int(expires_in)
+        else:
+            now = round(datetime.utcnow().timestamp())
+            expires_in = token_json.get("expires_in")
+            self._tap._config["expires_at"] = int(expires_in) + now
 
         with open(self._tap.config_file, "w") as outfile:
             json.dump(self._tap._config, outfile, indent=4)
