@@ -58,6 +58,137 @@ def test_redact_oauth_exception_leaves_short_values_unchanged(authenticator):
     assert "client_id=12345" in redacted
 
 
+def test_redact_oauth_exception_masks_debug_token_params(authenticator):
+    exc = requests.HTTPError(
+        "400 Client Error for url: https://graph.facebook.com/v24.0/debug_token?"
+        f"input_token={_ACCESS_TOKEN}&access_token={_CLIENT_ID}|{_CLIENT_SECRET}"
+    )
+
+    redacted = authenticator._redact_oauth_exception(exc)
+
+    assert _ACCESS_TOKEN not in redacted
+    assert f"input_token={_ACCESS_TOKEN[:10]}***{_ACCESS_TOKEN[-10:]}" in redacted
+
+
+def test_is_token_valid_without_expires_at(authenticator):
+    assert authenticator.is_token_valid() is False
+
+
+def test_is_token_valid_with_expires_at(authenticator, monkeypatch):
+    from datetime import datetime
+
+    now = round(datetime.utcnow().timestamp())
+    authenticator._tap.config["expires_at"] = now + 864000 * 2
+    assert authenticator.is_token_valid() is True
+
+    authenticator._tap.config["expires_at"] = now + 864000 // 2
+    assert authenticator.is_token_valid() is False
+
+
+def test_update_access_token_without_expires_in(authenticator, monkeypatch, tmp_path):
+    config_file = tmp_path / "config.json"
+    config_file.write_text("{}")
+    authenticator._tap.config_file = str(config_file)
+
+    data_access_expires_at = 1893456000
+
+    token_response = MagicMock()
+    token_response.json.return_value = {
+        "access_token": "new-token",
+        "token_type": "bearer",
+    }
+    token_response.raise_for_status.return_value = None
+
+    debug_response = MagicMock()
+    debug_response.json.return_value = {
+        "data": {
+            "data_access_expires_at": data_access_expires_at,
+            "is_valid": True,
+        }
+    }
+    debug_response.raise_for_status.return_value = None
+
+    def mock_get(url, *args, **kwargs):
+        if "debug_token" in url:
+            return debug_response
+        return token_response
+
+    monkeypatch.setattr("tap_facebook.auth.requests.get", mock_get)
+
+    authenticator.update_access_token()
+
+    assert authenticator._tap._config["access_token"] == "new-token"
+    assert authenticator._tap._config["expires_at"] == data_access_expires_at
+
+
+def test_update_access_token_with_expires_in(authenticator, monkeypatch, tmp_path):
+    from datetime import datetime
+
+    config_file = tmp_path / "config.json"
+    config_file.write_text("{}")
+    authenticator._tap.config_file = str(config_file)
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "new-token",
+        "token_type": "bearer",
+        "expires_in": 5183996,
+    }
+    mock_response.raise_for_status.return_value = None
+    monkeypatch.setattr(
+        "tap_facebook.auth.requests.get",
+        lambda *args, **kwargs: mock_response,
+    )
+
+    before = round(datetime.utcnow().timestamp())
+    authenticator.update_access_token()
+    after = round(datetime.utcnow().timestamp())
+
+    assert authenticator._tap._config["access_token"] == "new-token"
+    assert before + 5183996 <= authenticator._tap._config["expires_at"] <= after + 5183996
+
+
+def test_update_access_token_redacts_debug_token_exception(
+    authenticator, monkeypatch, tmp_path
+):
+    config_file = tmp_path / "config.json"
+    config_file.write_text("{}")
+    authenticator._tap.config_file = str(config_file)
+
+    token_response = MagicMock()
+    token_response.json.return_value = {
+        "access_token": _ACCESS_TOKEN,
+        "token_type": "bearer",
+    }
+    token_response.raise_for_status.return_value = None
+
+    debug_error_url = (
+        "400 Client Error for url: https://graph.facebook.com/v24.0/debug_token?"
+        f"input_token={_ACCESS_TOKEN}&access_token={_CLIENT_ID}|{_CLIENT_SECRET}"
+    )
+    debug_response = MagicMock()
+    debug_response.json.return_value = {
+        "error": {"message": "Invalid token", "code": 100}
+    }
+    debug_response.raise_for_status.side_effect = requests.HTTPError(debug_error_url)
+
+    def mock_get(url, *args, **kwargs):
+        if "debug_token" in url:
+            return debug_response
+        return token_response
+
+    monkeypatch.setattr("tap_facebook.auth.requests.get", mock_get)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        authenticator.update_access_token()
+
+    message = str(exc_info.value)
+    assert _CLIENT_SECRET not in message
+    assert _ACCESS_TOKEN not in message
+    assert f"input_token={_ACCESS_TOKEN[:10]}***{_ACCESS_TOKEN[-10:]}" in message
+    assert exc_info.value.__cause__ is None
+
+
 def test_update_access_token_redacts_exception_and_suppresses_cause(
     authenticator, monkeypatch
 ):
