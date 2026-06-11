@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -56,6 +57,26 @@ class OAuth2Authenticator(APIAuthenticatorBase):
         # token can only be refreshed if previous token hasn't expired, refresh 10 days before expiration in case tap is not running often enough
         return not ((expires_in - now) < 864000) # 10 days in seconds
 
+    def _redact_oauth_exception(self, exc: Exception) -> str:
+        sensitive_params = {
+            "client_secret": 5,
+            "client_id": 5,
+            "fb_exchange_token": 10,
+            "access_token": 10,
+        }
+        message = str(exc)
+        for param, visible_len in sensitive_params.items():
+            message = re.sub(
+                rf"({re.escape(param)})=([^&\s]+)",
+                lambda match, n=visible_len: (
+                    f"{match.group(1)}={match.group(2)[:n]}***{match.group(2)[-n:]}"
+                    if len(match.group(2)) > 2 * n
+                    else match.group(0)
+                ),
+                message,
+            )
+        return message
+
     @backoff.on_exception(backoff.expo,(EmptyResponseError, RemoteDisconnected, ConnectionError),max_tries=5,factor=3)
     def update_access_token(self) -> None:
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -68,7 +89,8 @@ class OAuth2Authenticator(APIAuthenticatorBase):
             self.logger.info("OAuth authorization attempt was successful.")
         except Exception as ex:
             raise RuntimeError(
-                f"Failed OAuth login, response was '{token_response.json()}'. {ex}"
+                f"Failed OAuth login, response was '{token_response.json()}'. "
+                f"{self._redact_oauth_exception(ex)}"
             )
         token_json = token_response.json()
 
