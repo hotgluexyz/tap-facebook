@@ -91,7 +91,7 @@ class OAuth2Authenticator(APIAuthenticatorBase):
             raise RuntimeError(
                 f"Failed OAuth login, response was '{token_response.json()}'. "
                 f"{self._redact_oauth_exception(ex)}"
-            )
+            ) from None
         token_json = token_response.json()
 
         self.access_token = token_json["access_token"]
