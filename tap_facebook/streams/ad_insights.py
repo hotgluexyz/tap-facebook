@@ -6,7 +6,7 @@ import json
 import time
 import typing as t
 from functools import lru_cache
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 import facebook_business.adobjects.user as fb_user
 import pendulum
