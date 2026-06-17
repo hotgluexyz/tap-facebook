@@ -50,7 +50,7 @@ SLEEP_TIME_INCREMENT = 5
 INSIGHTS_MAX_WAIT_TO_START_SECONDS = 5 * 60
 INSIGHTS_MAX_WAIT_TO_FINISH_SECONDS = 30 * 60
 USAGE_LIMIT_THRESHOLD = 75
-BATCH_SIZE = 30
+BATCH_SIZE = 7
 
 BACKOFF_MAX_RETRIES = 5
 BACKOFF_INITIAL_SLEEP = 60
@@ -333,7 +333,7 @@ class AdsInsightStream(Stream):
                     "breakdowns": self._report_definition["breakdowns"],
                     "fields": columns,
                     "time_increment": time_increment,
-                    "limit": 100,
+                    "limit": 1000,
                     "action_attribution_windows": [
                         self._report_definition["action_attribution_windows_view"],
                         self._report_definition["action_attribution_windows_click"],
