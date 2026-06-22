@@ -50,7 +50,8 @@ SLEEP_TIME_INCREMENT = 5
 INSIGHTS_MAX_WAIT_TO_START_SECONDS = 5 * 60
 INSIGHTS_MAX_WAIT_TO_FINISH_SECONDS = 30 * 60
 USAGE_LIMIT_THRESHOLD = 75
-BATCH_SIZE = 30
+BATCH_SIZE = 7
+INSIGHTS_PAGE_LIMIT = 500
 
 BACKOFF_MAX_RETRIES = 5
 BACKOFF_INITIAL_SLEEP = 60
@@ -333,7 +334,7 @@ class AdsInsightStream(Stream):
                     "breakdowns": self._report_definition["breakdowns"],
                     "fields": columns,
                     "time_increment": time_increment,
-                    "limit": 100,
+                    "limit": INSIGHTS_PAGE_LIMIT,
                     "action_attribution_windows": [
                         self._report_definition["action_attribution_windows_view"],
                         self._report_definition["action_attribution_windows_click"],
@@ -383,14 +384,33 @@ class AdsInsightStream(Stream):
                         data = json.loads(response["body"])
                     else:
                         raise RuntimeError(f"Batch request failed: {response}")
-                if data.get("data") and len(data["data"]) > 0:
+
+                total_records = 0
+                while True:
+                    records = data.get("data", [])
+                    total_records += len(records)
+                    for record in records:
+                        yield record
+
+                    next_url = data.get("paging", {}).get("next")
+                    if not next_url:
+                        break
+
+                    next_page_request = {
+                        "method": "GET",
+                        "relative_url": next_url[next_url.find(f"act_{account_id}"):],
+                    }
+
+                    self.check_limit(account_id)
+                    response = self._execute_single_request_with_retries(api, next_page_request)
+                    data = json.loads(response["body"])
+
+                if total_records:
                     self.logger.info(
                         "%s records fetched for %s",
-                        len(data["data"]),
+                        total_records,
                         final_date.to_date_string(),
                     )
-                    for record in data["data"]:
-                        yield record
                 else:
                     self.logger.info("No records fetched for %s", final_date.to_date_string())
                 report_start_consolidated = final_date
