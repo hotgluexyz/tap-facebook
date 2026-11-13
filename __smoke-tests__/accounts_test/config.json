@@ -1,6 +1,9 @@
 {
     "start_date": "2024-03-15T00:00:00Z",
     "end_date": null,
+    "client_id": "fake-client-id",
+    "client_secret": "fake-client-secret",
+    "refresh_token": "fake-refresh-token",
     "access_token": "fak***",
     "expires_at": 4102444800,
     "api_version": "v21.0",
